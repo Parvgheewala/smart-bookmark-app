@@ -11,6 +11,7 @@
   "dependencies": {
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.95.3",
+    "cheerio": "^1.2.0",
     "cmdk": "^1.1.1",
     "framer-motion": "^12.34.0",
     "fuse.js": "^7.1.0",

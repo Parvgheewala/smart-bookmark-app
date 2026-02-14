@@ -1,7 +1,8 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { ExternalLink, Edit, Trash2, AlertTriangle } from 'lucide-react'
+import { ExternalLink, Edit, Trash2, AlertTriangle, Image as ImageIcon } from 'lucide-react'
+import { useState } from 'react'
 
 type Bookmark = {
   id: number
@@ -11,6 +12,10 @@ type Bookmark = {
   created_at: string
   verified?: boolean | null
   verification_message?: string | null
+  preview_image?: string | null
+  preview_title?: string | null
+  preview_description?: string | null
+  favicon?: string | null
 }
 
 type Carousel3DProps = {
@@ -21,6 +26,7 @@ type Carousel3DProps = {
   onEdit: (bookmark: Bookmark) => void
   onDelete: (id: number, title: string) => void
   darkMode: boolean
+  onRefreshPreview?: (id: number, url: string) => void
 }
 
 export default function Carousel3D({
@@ -31,7 +37,12 @@ export default function Carousel3D({
   onEdit,
   onDelete,
   darkMode,
+  onRefreshPreview,
 }: Carousel3DProps) {
+  const [imageErrors, setImageErrors] = useState<Set<number>>(new Set())
+  const [showPreviewModal, setShowPreviewModal] = useState(false)
+  const [selectedBookmark, setSelectedBookmark] = useState<Bookmark | null>(null)
+
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-96">
@@ -49,14 +60,12 @@ export default function Carousel3D({
     const diff = index - selectedIndex
     const totalItems = items.length
 
-    // Normalize diff to handle wraparound
     let normalizedDiff = diff
     if (Math.abs(diff) > totalItems / 2) {
       normalizedDiff = diff > 0 ? diff - totalItems : diff + totalItems
     }
 
     if (normalizedDiff === 0) {
-      // Center card
       return {
         transform: 'translateX(0) translateZ(0) scale(1) rotateY(0deg)',
         opacity: 1,
@@ -64,7 +73,6 @@ export default function Carousel3D({
         zIndex: 10,
       }
     } else if (normalizedDiff === -1) {
-      // Left card
       return {
         transform: 'translateX(-280px) translateZ(-200px) scale(0.7) rotateY(35deg)',
         opacity: 0.6,
@@ -72,7 +80,6 @@ export default function Carousel3D({
         zIndex: 5,
       }
     } else if (normalizedDiff === 1) {
-      // Right card
       return {
         transform: 'translateX(280px) translateZ(-200px) scale(0.7) rotateY(-35deg)',
         opacity: 0.6,
@@ -80,7 +87,6 @@ export default function Carousel3D({
         zIndex: 5,
       }
     } else if (normalizedDiff === -2) {
-      // Far left
       return {
         transform: 'translateX(-400px) translateZ(-350px) scale(0.5) rotateY(45deg)',
         opacity: 0.3,
@@ -88,7 +94,6 @@ export default function Carousel3D({
         zIndex: 2,
       }
     } else if (normalizedDiff === 2) {
-      // Far right
       return {
         transform: 'translateX(400px) translateZ(-350px) scale(0.5) rotateY(-45deg)',
         opacity: 0.3,
@@ -96,7 +101,6 @@ export default function Carousel3D({
         zIndex: 2,
       }
     } else {
-      // Hidden
       return {
         transform: 'translateX(0) translateZ(-500px) scale(0.3)',
         opacity: 0,
@@ -104,6 +108,10 @@ export default function Carousel3D({
         zIndex: 0,
       }
     }
+  }
+
+  const handleImageError = (bookmarkId: number) => {
+    setImageErrors(prev => new Set(prev).add(bookmarkId))
   }
 
   const cardBg = darkMode
@@ -153,11 +161,12 @@ export default function Carousel3D({
           {items.map((bookmark, index) => {
             const style = getCardStyle(index)
             const isCenter = index === selectedIndex
+            const hasPreview = bookmark.preview_image && !imageErrors.has(bookmark.id)
 
             return (
               <motion.div
                 key={bookmark.id}
-                className={`absolute w-80 border-2 rounded-2xl shadow-2xl backdrop-blur-md ${cardBg}`}
+                className={`absolute w-80 border-2 rounded-2xl shadow-2xl backdrop-blur-md ${cardBg} overflow-hidden`}
                 style={{
                   ...style,
                   transformStyle: 'preserve-3d',
@@ -180,6 +189,49 @@ export default function Carousel3D({
                   }
                 }}
               >
+                {/* Preview Image */}
+                {hasPreview && (
+                  <div className="relative w-full h-40 bg-gray-200 overflow-hidden">
+                    <img
+                      src={bookmark.preview_image!}
+                      alt={bookmark.preview_title || bookmark.title}
+                      className="w-full h-full object-cover"
+                      onError={() => handleImageError(bookmark.id)}
+                      loading="lazy"
+                    />
+                    {bookmark.favicon && (
+                      <div className="absolute top-2 left-2 w-8 h-8 bg-white rounded-full p-1 shadow-md">
+                        <img 
+                          src={bookmark.favicon} 
+                          alt="favicon"
+                          className="w-full h-full object-contain"
+                          onError={(e) => (e.currentTarget.style.display = 'none')}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* No Preview Placeholder */}
+                {!hasPreview && (
+                  <div className={`relative w-full h-40 flex items-center justify-center ${
+                    darkMode ? 'bg-gray-700' : 'bg-gray-100'
+                  }`}>
+                    <ImageIcon className={`w-12 h-12 ${darkMode ? 'text-gray-600' : 'text-gray-300'}`} />
+                    {isCenter && onRefreshPreview && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onRefreshPreview(bookmark.id, bookmark.url)
+                        }}
+                        className="absolute bottom-2 right-2 px-2 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
+                      >
+                        Fetch Preview
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 <div className="p-6 space-y-4">
                   {/* Title with warning badge */}
                   <div className="flex items-center gap-2">
@@ -194,7 +246,14 @@ export default function Carousel3D({
                     )}
                   </div>
 
-                  {/* URL with warning icon */}
+                  {/* Preview Description */}
+                  {bookmark.preview_description && (
+                    <p className={`text-sm line-clamp-2 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      {bookmark.preview_description}
+                    </p>
+                  )}
+
+                  {/* URL */}
                   <div className="flex items-start gap-2">
                     {bookmark.verified === false && (
                       <AlertTriangle className="w-4 h-4 text-yellow-500 mt-1 shrink-0" />
@@ -208,20 +267,13 @@ export default function Carousel3D({
                     </p>
                   </div>
 
-                  {/* Warning message */}
-                  {bookmark.verified === false && bookmark.verification_message && (
-                    <p className="text-xs text-yellow-500 ml-6">
-                      {bookmark.verification_message}
-                    </p>
-                  )}
-
                   {/* Date */}
                   <p
                     className={`text-xs ${
                       darkMode ? 'text-gray-500' : 'text-gray-400'
                     }`}
                   >
-                    Added: {new Date(bookmark.created_at).toLocaleDateString()}
+                    Added {new Date(bookmark.created_at).toLocaleDateString()}
                   </p>
 
                   {/* Actions (only show on center card) */}
@@ -295,7 +347,7 @@ export default function Carousel3D({
           darkMode ? 'text-gray-500' : 'text-gray-400'
         }`}
       >
-        Use ← → arrow keys or scroll
+        Use arrow keys or scroll
       </div>
     </div>
   )

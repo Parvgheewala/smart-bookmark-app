@@ -30,6 +30,12 @@ type Bookmark = {
   verified?: boolean | null
   verification_message?: string | null
   verified_at?: string | null
+  // Preview fields
+  preview_image?: string | null
+  preview_title?: string | null
+  preview_description?: string | null
+  favicon?: string | null
+  last_preview_fetch?: string | null
 }
 
 export default function Home() {
@@ -49,12 +55,65 @@ export default function Home() {
   const [editUrl, setEditUrl] = useState('')
   const [urlError, setUrlError] = useState('')
   const [editUrlError, setEditUrlError] = useState('')
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null)
+  const [fetchingPreview, setFetchingPreview] = useState(false)
+  const [toast, setToast] = useState<{
+    message: string
+    type: 'success' | 'error' | 'warning'
+  } | null>(null)
 
   // ---------- Toast helper ----------
-  const showToast = (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
+  const showToast = (
+    message: string,
+    type: 'success' | 'error' | 'warning' = 'success'
+  ) => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 4000)
+  }
+
+  // ---------- Fetch preview metadata ----------
+  const fetchPreview = async (bookmarkId: number, url: string) => {
+    if (fetchingPreview) return
+    
+    try {
+      setFetchingPreview(true)
+      showToast('Fetching preview...', 'success')
+      
+      const res = await fetch('/api/fetch-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+
+      const data = await res.json()
+
+      if (res.ok) {
+        // Update database with preview data
+        const { error } = await supabase
+          .from('bookmarks')
+          .update({
+            preview_image: data.image || null,
+            preview_title: data.title || null,
+            preview_description: data.description || null,
+            favicon: data.favicon || null,
+            last_preview_fetch: new Date().toISOString(),
+          })
+          .eq('id', bookmarkId)
+
+        if (error) {
+          showToast('Error saving preview', 'error')
+        } else {
+          showToast('Preview fetched successfully!', 'success')
+          await load() // Reload bookmarks
+        }
+      } else {
+        showToast(data.error || 'Failed to fetch preview', 'error')
+      }
+    } catch (error) {
+      console.error('Preview fetch error:', error)
+      showToast('Network error fetching preview', 'error')
+    } finally {
+      setFetchingPreview(false)
+    }
   }
 
   // ---------- URL validation ----------
@@ -73,7 +132,9 @@ export default function Home() {
     }
   }
 
-  const verifyUrlReachable = async (url: string): Promise<{ reachable: boolean; message: string }> => {
+  const verifyUrlReachable = async (
+    url: string
+  ): Promise<{ reachable: boolean; message: string }> => {
     try {
       const res = await fetch('/api/verify-url', {
         method: 'POST',
@@ -103,7 +164,11 @@ export default function Home() {
   }
 
   // ---------- Update verification status ----------
-  const updateVerificationStatus = async (bookmarkId: number, reachable: boolean, message: string) => {
+  const updateVerificationStatus = async (
+    bookmarkId: number,
+    reachable: boolean,
+    message: string
+  ) => {
     const { error } = await supabase
       .from('bookmarks')
       .update({
@@ -152,7 +217,10 @@ export default function Home() {
     setStrictMode(next)
     localStorage.setItem('strictMode', String(next))
     window.dispatchEvent(
-      new StorageEvent('storage', { key: 'strictMode', newValue: String(next) })
+      new StorageEvent('storage', {
+        key: 'strictMode',
+        newValue: String(next),
+      })
     )
     showToast(`Strict mode ${next ? 'enabled' : 'disabled'}`, 'success')
   }
@@ -163,6 +231,7 @@ export default function Home() {
 
     const init = async () => {
       const { data, error } = await supabase.auth.getUser()
+
       if (error || !data.user) {
         window.location.href = '/login'
         return
@@ -172,8 +241,8 @@ export default function Home() {
       setUserId(currentUserId)
       await load()
 
+      // Realtime subscription
       channel = supabase.channel(`bookmarks_${currentUserId}`)
-
       channel
         .on(
           'postgres_changes',
@@ -184,7 +253,6 @@ export default function Home() {
           },
           (payload: any) => {
             console.log('Realtime event:', payload)
-
             if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
               if (payload.new?.user_id === currentUserId) {
                 load()
@@ -275,6 +343,7 @@ export default function Home() {
       setEditUrlError('')
       return
     }
+
     if (validateUrlFormat(editUrl)) {
       setEditUrlError('')
     } else {
@@ -282,7 +351,7 @@ export default function Home() {
     }
   }, [editUrl])
 
-  // ---------- CRUD ----------
+  // ---------- CRUD operations ----------
   const addBookmark = async (title: string, url: string) => {
     if (!title.trim() || !url.trim()) {
       showToast('Title and URL required', 'warning')
@@ -321,6 +390,9 @@ export default function Home() {
       const bookmarkId = data.id
       setAddModalOpen(false)
       setUrlError('')
+
+      // Fetch preview automatically in background
+      fetchPreview(bookmarkId, url)
 
       // Non-strict mode: verify in background
       if (!strictMode) {
@@ -374,6 +446,11 @@ export default function Home() {
       setEditingBookmark(null)
       setEditUrlError('')
 
+      // Re-fetch preview if URL changed
+      if (editUrl !== editingBookmark.url) {
+        fetchPreview(bookmarkId, editUrl)
+      }
+
       // Non-strict: verify in background
       if (!strictMode) {
         verifyUrlReachable(editUrl).then(({ reachable, message }) => {
@@ -407,22 +484,34 @@ export default function Home() {
   const bgClass = darkMode
     ? 'bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900'
     : 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50'
+
   const headerClass = darkMode
     ? 'bg-gray-800/80 border-gray-700'
     : 'bg-white/80 border-gray-200'
+
   const inputClass = darkMode
     ? 'bg-gray-700 border-gray-600 text-white'
     : 'bg-white border-gray-300 text-black'
+
   const inputErrorClass = darkMode
     ? 'bg-gray-700 border-red-500 text-white'
     : 'bg-white border-red-500 text-black'
 
   return (
-    <div className={`min-h-screen ${bgClass} transition-colors duration-500`}>
+    <div className={`min-h-screen ${bgClass} transition-colors duration-300`}>
       {/* Animated background gradient */}
-      <div className="fixed inset-0 opacity-30">
-        <div className="absolute top-0 left-0 w-96 h-96 bg-purple-500 rounded-full blur-3xl animate-pulse"></div>
-        <div className="absolute bottom-0 right-0 w-96 h-96 bg-blue-500 rounded-full blur-3xl animate-pulse delay-1000"></div>
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div
+          className={`absolute top-1/4 -left-1/4 w-96 h-96 ${
+            darkMode ? 'bg-purple-700' : 'bg-purple-300'
+          } rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-pulse`}
+        />
+        <div
+          className={`absolute bottom-1/4 -right-1/4 w-96 h-96 ${
+            darkMode ? 'bg-blue-700' : 'bg-blue-300'
+          } rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-pulse`}
+          style={{ animationDelay: '2s' }}
+        />
       </div>
 
       {/* Toast notification */}
@@ -432,123 +521,173 @@ export default function Home() {
             initial={{ opacity: 0, y: -50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -50 }}
-            className="fixed top-4 right-4 z-50"
+            className={`fixed top-4 right-4 z-50 px-6 py-4 rounded-lg shadow-2xl backdrop-blur-md border-2 flex items-center gap-3 ${
+              toast.type === 'success'
+                ? darkMode
+                  ? 'bg-green-900/80 border-green-700 text-green-100'
+                  : 'bg-green-100/80 border-green-500 text-green-900'
+                : toast.type === 'warning'
+                ? darkMode
+                  ? 'bg-yellow-900/80 border-yellow-700 text-yellow-100'
+                  : 'bg-yellow-100/80 border-yellow-500 text-yellow-900'
+                : darkMode
+                ? 'bg-red-900/80 border-red-700 text-red-100'
+                : 'bg-red-100/80 border-red-500 text-red-900'
+            }`}
           >
-            <div
-              className={`flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg backdrop-blur-md ${
-                toast.type === 'success'
-                  ? 'bg-green-600 text-white'
-                  : toast.type === 'error'
-                  ? 'bg-red-600 text-white'
-                  : 'bg-yellow-600 text-white'
-              }`}
-            >
-              {toast.type === 'warning' && <AlertTriangle className="w-5 h-5" />}
-              {toast.type === 'error' && <AlertCircle className="w-5 h-5" />}
-              <span>{toast.message}</span>
-            </div>
+            {toast.type === 'warning' && <AlertTriangle className="w-5 h-5" />}
+            {toast.type === 'error' && <AlertCircle className="w-5 h-5" />}
+            <span className="font-medium">{toast.message}</span>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Header */}
       <header
-        className={`sticky top-0 z-40 border-b-2 backdrop-blur-md ${headerClass}`}
+        className={`sticky top-0 z-40 border-b-2 ${headerClass} backdrop-blur-md shadow-lg`}
       >
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <BookOpen className="w-8 h-8 text-blue-500" />
-              <div>
-                <h1 className="text-2xl font-bold">Smart Bookmarks</h1>
-                <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                  {items.length} bookmark{items.length !== 1 ? 's' : ''}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCommandOpen(true)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg border-2 transition ${
-                  darkMode
-                    ? 'border-gray-700 hover:bg-gray-800'
-                    : 'border-gray-200 hover:bg-gray-100'
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <BookOpen
+              className={`w-8 h-8 ${
+                darkMode ? 'text-purple-400' : 'text-purple-600'
+              }`}
+            />
+            <div>
+              <h1
+                className={`text-2xl font-bold ${
+                  darkMode ? 'text-white' : 'text-gray-900'
                 }`}
               >
-                <Search className="w-4 h-4" />
-                <span className="hidden sm:inline">Search</span>
-                <kbd className={`px-2 py-1 text-xs rounded ${darkMode ? 'bg-gray-700' : 'bg-gray-200'}`}>
-                  /
-                </kbd>
-              </button>
-
-              <button
-                onClick={() => setAddModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
-              >
-                <Plus className="w-4 h-4" />
-                <span className="hidden sm:inline">Add</span>
-              </button>
-
-              <button
-                onClick={() => setShowSettings(!showSettings)}
-                className={`p-2 rounded-lg transition ${
-                  darkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
+                Smart Bookmarks
+              </h1>
+              <p
+                className={`text-sm ${
+                  darkMode ? 'text-gray-400' : 'text-gray-600'
                 }`}
               >
-                <Settings className="w-5 h-5" />
-              </button>
-
-              <button
-                onClick={toggleDarkMode}
-                className={`p-2 rounded-lg transition ${
-                  darkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
-                }`}
-              >
-                {darkMode ? <SunMedium className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-              </button>
-
-              <button
-                onClick={logout}
-                className="p-2 rounded-lg bg-red-600 text-white hover:bg-red-700 transition"
-              >
-                <LogOut className="w-5 h-5" />
-              </button>
+                {items.length} bookmark{items.length !== 1 ? 's' : ''}
+              </p>
             </div>
           </div>
 
-          {/* Settings panel */}
-          <AnimatePresence>
-            {showSettings && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="mt-4 pt-4 border-t"
-              >
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={strictMode}
-                    onChange={toggleStrictMode}
-                    className="w-5 h-5 cursor-pointer"
-                  />
-                  <div>
-                    <div className="font-medium">Strict URL Verification</div>
-                    <div className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      Verify URLs are reachable before saving (adds 1-3s delay)
-                    </div>
-                  </div>
-                </label>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCommandOpen(true)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
+                darkMode
+                  ? 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              }`}
+              title="Search bookmarks (Press /)"
+            >
+              <Search className="w-4 h-4" />
+              <span className="hidden sm:inline">Search</span>
+            </button>
+
+            <button
+              onClick={() => setAddModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+              title="Add bookmark (⌘N)"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">Add</span>
+            </button>
+
+            <button
+              onClick={toggleDarkMode}
+              className={`p-2 rounded-lg transition ${
+                darkMode
+                  ? 'bg-gray-700 hover:bg-gray-600 text-yellow-400'
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              }`}
+              title="Toggle dark mode"
+            >
+              {darkMode ? (
+                <SunMedium className="w-5 h-5" />
+              ) : (
+                <Moon className="w-5 h-5" />
+              )}
+            </button>
+
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className={`p-2 rounded-lg transition ${
+                darkMode
+                  ? 'bg-gray-700 hover:bg-gray-600'
+                  : 'bg-gray-100 hover:bg-gray-200'
+              }`}
+              title="Settings"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
+
+            <button
+              onClick={logout}
+              className={`p-2 rounded-lg transition ${
+                darkMode
+                  ? 'bg-red-900/50 hover:bg-red-900 text-red-400'
+                  : 'bg-red-100 hover:bg-red-200 text-red-600'
+              }`}
+              title="Logout"
+            >
+              <LogOut className="w-5 h-5" />
+            </button>
+          </div>
         </div>
+
+        {/* Settings panel */}
+        <AnimatePresence>
+          {showSettings && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="border-t"
+            >
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3
+                      className={`font-semibold ${
+                        darkMode ? 'text-white' : 'text-gray-900'
+                      }`}
+                    >
+                      Strict Mode
+                    </h3>
+                    <p
+                      className={`text-sm ${
+                        darkMode ? 'text-gray-400' : 'text-gray-600'
+                      }`}
+                    >
+                      Verify URLs before saving (slower but safer)
+                    </p>
+                  </div>
+                  <button
+                    onClick={toggleStrictMode}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
+                      strictMode
+                        ? 'bg-blue-600'
+                        : darkMode
+                        ? 'bg-gray-700'
+                        : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                        strictMode ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </header>
 
       {/* Main content */}
-      <main className="relative z-10 max-w-7xl mx-auto px-6 py-12">
+      <main className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <Carousel3D
           items={items}
           selectedIndex={selectedIndex}
@@ -557,6 +696,7 @@ export default function Home() {
           onEdit={startEdit}
           onDelete={delBookmark}
           darkMode={darkMode}
+          onRefreshPreview={fetchPreview}
         />
       </main>
 
@@ -583,111 +723,123 @@ export default function Home() {
       />
 
       {/* Edit Bookmark Modal */}
-      <AnimatePresence>
-        {editModalOpen && editingBookmark && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm"
-            onClick={() => setEditModalOpen(false)}
+      {editModalOpen && editingBookmark && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm"
+          onClick={() => setEditModalOpen(false)}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className={`w-full max-w-md rounded-xl shadow-2xl backdrop-blur-md border-2 ${
+              darkMode
+                ? 'bg-gray-800 border-gray-700'
+                : 'bg-white border-gray-200'
+            }`}
+            onClick={(e) => e.stopPropagation()}
           >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.2 }}
-              className={`w-full max-w-md rounded-xl shadow-2xl backdrop-blur-md border-2 ${
-                darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
+            <div
+              className={`flex items-center justify-between p-6 border-b ${
+                darkMode ? 'border-gray-700' : 'border-gray-200'
               }`}
-              onClick={(e) => e.stopPropagation()}
             >
-              <div
-                className={`flex items-center justify-between p-6 border-b ${
-                  darkMode ? 'border-gray-700' : 'border-gray-200'
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <Edit className="w-5 h-5" />
+                Edit Bookmark
+              </h2>
+              <button
+                onClick={() => setEditModalOpen(false)}
+                className={`p-2 rounded-lg transition ${
+                  darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
                 }`}
               >
-                <h2 className="text-xl font-bold flex items-center gap-2">
-                  <Edit className="w-5 h-5" />
-                  Edit Bookmark
-                </h2>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                saveEdit()
+              }}
+              className="p-6 space-y-4"
+            >
+              <div>
+                <label className="block text-sm font-medium mb-2">Title</label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className={`w-full px-4 py-3 rounded-lg border-2 ${inputClass} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">URL</label>
+                <input
+                  type="text"
+                  value={editUrl}
+                  onChange={(e) => setEditUrl(e.target.value)}
+                  disabled={verifying}
+                  className={`w-full px-4 py-3 rounded-lg border-2 ${
+                    editUrlError ? inputErrorClass : inputClass
+                  } focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                />
+                {editUrlError && (
+                  <div className="flex items-center gap-1 mt-2 text-red-500 text-sm">
+                    <AlertCircle className="w-4 h-4" />
+                    {editUrlError}
+                  </div>
+                )}
+                {verifying && (
+                  <div className="flex items-center gap-2 mt-2 text-blue-500 text-sm">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500" />
+                    Verifying URL...
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-2">
                 <button
+                  type="button"
                   onClick={() => setEditModalOpen(false)}
-                  className={`p-2 rounded-lg transition ${
-                    darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
+                  className={`flex-1 px-4 py-3 rounded-lg font-medium transition ${
+                    darkMode
+                      ? 'bg-gray-700 hover:bg-gray-600'
+                      : 'bg-gray-200 hover:bg-gray-300'
                   }`}
                 >
-                  <X className="w-5 h-5" />
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={
+                    !editTitle.trim() ||
+                    !editUrl.trim() ||
+                    !!editUrlError ||
+                    verifying
+                  }
+                  className="flex-1 px-4 py-3 rounded-lg font-medium bg-blue-600 text-white hover:bg-blue-700 transition disabled:bg-gray-500 disabled:cursor-not-allowed"
+                >
+                  {verifying ? 'Verifying...' : 'Save'}
                 </button>
               </div>
-
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2">Title</label>
-                  <input
-                    type="text"
-                    value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    className={`w-full px-4 py-3 rounded-lg border-2 ${inputClass} focus:outline-none focus:ring-2 focus:ring-blue-500`}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-2">URL</label>
-                  <input
-                    type="text"
-                    value={editUrl}
-                    onChange={(e) => setEditUrl(e.target.value)}
-                    disabled={verifying}
-                    className={`w-full px-4 py-3 rounded-lg border-2 ${
-                      editUrlError ? inputErrorClass : inputClass
-                    } focus:outline-none focus:ring-2 focus:ring-blue-500`}
-                  />
-                  {editUrlError && (
-                    <div className="flex items-center gap-1 mt-2 text-red-500 text-sm">
-                      <AlertCircle className="w-4 h-4" />
-                      {editUrlError}
-                    </div>
-                  )}
-                  {verifying && (
-                    <div className="flex items-center gap-2 mt-2 text-blue-500 text-sm">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
-                      Verifying URL...
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex gap-3 pt-2">
-                  <button
-                    onClick={() => setEditModalOpen(false)}
-                    className={`flex-1 px-4 py-3 rounded-lg font-medium transition ${
-                      darkMode
-                        ? 'bg-gray-700 hover:bg-gray-600'
-                        : 'bg-gray-200 hover:bg-gray-300'
-                    }`}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={saveEdit}
-                    disabled={!editTitle.trim() || !editUrl.trim() || !!editUrlError || verifying}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-medium bg-green-600 text-white hover:bg-green-700 transition disabled:bg-gray-500 disabled:cursor-not-allowed"
-                  >
-                    <Save className="w-4 h-4" />
-                    {verifying ? 'Verifying...' : 'Save'}
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+            </form>
+          </motion.div>
+        </div>
+      )}
 
       {/* Footer hint */}
       <div
         className={`fixed bottom-4 left-1/2 transform -translate-x-1/2 text-sm ${
           darkMode ? 'text-gray-500' : 'text-gray-400'
-        } backdrop-blur-sm bg-black/20 px-4 py-2 rounded-full`}
+        }`}
       >
-        Press <kbd className="px-2 py-1 rounded bg-gray-700 text-white text-xs">/</kbd> to search
-        • <kbd className="px-2 py-1 rounded bg-gray-700 text-white text-xs">⌘N</kbd> to add
+        Press <kbd className="px-2 py-1 rounded bg-gray-700 text-white">/</kbd>{' '}
+        to search • <kbd className="px-2 py-1 rounded bg-gray-700 text-white">⌘N</kbd>{' '}
+        to add
       </div>
     </div>
   )

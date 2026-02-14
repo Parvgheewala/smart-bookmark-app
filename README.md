@@ -15,14 +15,14 @@ A modern, full-stack bookmark management application with real-time synchronizat
 
 ## 📋 Table of Contents
 
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Project Approach](#project-approach)
-- [Problems Faced & Solutions](#problems-faced--solutions)
-- [Installation](#installation)
-- [Environment Variables](#environment-variables)
-- [Database Setup](#database-setup)
-- [Deployment](#deployment)
+- [Features](../../c:/Users/Lenovo/Downloads/README (2).md#features)
+- [Tech Stack](../../c:/Users/Lenovo/Downloads/README (2).md#tech-stack)
+- [Project Approach](../../c:/Users/Lenovo/Downloads/README (2).md#project-approach)
+- [Problems Faced & Solutions](../../c:/Users/Lenovo/Downloads/README (2).md#problems-faced--solutions)
+- [Installation](../../c:/Users/Lenovo/Downloads/README (2).md#installation)
+- [Environment Variables](../../c:/Users/Lenovo/Downloads/README (2).md#environment-variables)
+- [Database Setup](../../c:/Users/Lenovo/Downloads/README (2).md#database-setup)
+- [Deployment](../../c:/Users/Lenovo/Downloads/README (2).md#deployment)
 
 ---
 
